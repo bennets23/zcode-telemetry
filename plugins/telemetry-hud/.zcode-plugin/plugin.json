@@ -1,0 +1,71 @@
+{
+  "name": "telemetry-hud",
+  "version": "0.3.1",
+  "description": "Live token throughput, calibrated context X-ray, prompt cache efficiency, subagent tracing, and tool/model latency telemetry for ZCode.",
+  "author": {
+    "name": "bennets23"
+  },
+  "extension": {
+    "engines": {
+      "zcode": "^1.4.0"
+    },
+    "main": "src/extension.mjs",
+    "activationEvents": [
+      "onAvailable"
+    ],
+    "grants": [
+      "sessions.read"
+    ],
+    "protocols": {
+      "sessions": 1,
+      "rows": 4
+    },
+    "contributes": {
+      "commands": [
+        {
+          "id": "open-dashboard",
+          "title": "Open Telemetry HUD"
+        },
+        {
+          "id": "cycle-pill-mode",
+          "title": "Cycle Status Pill Mode"
+        },
+        {
+          "id": "toggle-pill",
+          "title": "Toggle Status Pill"
+        }
+      ],
+      "views": [
+        {
+          "id": "dashboard",
+          "title": "Telemetry HUD",
+          "icon": "activity"
+        }
+      ]
+    }
+  },
+  "slots": {
+    "composer.status": [
+      {
+        "id": "live-pill",
+        "target": {
+          "command": "open-dashboard"
+        },
+        "title": "Telemetry HUD",
+        "icon": "activity",
+        "order": 10
+      }
+    ],
+    "sidePane.launcher": [
+      {
+        "id": "dashboard-launcher",
+        "target": {
+          "view": "dashboard"
+        },
+        "title": "Telemetry HUD",
+        "icon": "activity",
+        "order": 10
+      }
+    ]
+  }
+}

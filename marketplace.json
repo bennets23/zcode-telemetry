@@ -1,0 +1,13 @@
+{
+  "name": "zcode-telemetry",
+  "plugins": [
+    {
+      "name": "telemetry-hud",
+      "source": "./plugins/telemetry-hud",
+      "version": "0.3.1",
+      "description": "Live token throughput, calibrated context X-ray, prompt cache efficiency, subagent tracing, and tool/model latency telemetry for ZCode.",
+      "displayName": "Telemetry HUD",
+      "category": "developer-tools"
+    }
+  ]
+}
