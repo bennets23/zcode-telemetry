@@ -520,10 +520,10 @@
         </div>
         <div class="actions">
           <select id="session-select" title="Session" hidden></select>
-          <button id="btn-view-mode" type="button">+ FULL</button>
-          <button id="btn-theme" type="button">MONO</button>
-          <button id="btn-copy" type="button">COPY</button>
-          <button id="btn-refresh" type="button" title="Refresh">R</button>
+          <button id="btn-view-mode" type="button" title="Toggle Compact or Full HUD">+ FULL</button>
+          <button id="btn-theme" type="button" title="Switch palette: MONO, AMBER, or CRT">MONO</button>
+          <button id="btn-copy" type="button" title="Copy plain-text ASCII report">COPY</button>
+          <button id="btn-refresh" type="button" title="Force refresh telemetry">R</button>
         </div>
       </header>
 
@@ -616,10 +616,10 @@
           </div>
           <div class="cfg-row">
             <div class="btn-group">
-              <button id="btn-smooth" type="button">EMA: ON</button>
-              <button id="btn-pill-mode" type="button">PILL: COMPACT</button>
-              <button id="btn-pill-click" type="button">CLICK: HUD</button>
-              <button id="btn-pill-vis" type="button">PILL: ON</button>
+              <button id="btn-smooth" type="button" title="EMA smoothing on live tok/s (ON: steady moving average, OFF: raw chunks)">EMA: ON</button>
+              <button id="btn-pill-mode" type="button" title="Pill format: COMPACT (148 t/s | 51%), DETAILED (148.2 t/s | 51%), MINIMAL (148 t/s)">PILL: COMPACT</button>
+              <button id="btn-pill-click" type="button" title="Pill click action: HUD (open panel) or CYCLE (switch pill format; reopen HUD via Side Pane +)">CLICK: HUD</button>
+              <button id="btn-pill-vis" type="button" title="Show or hide composer pill (reopen HUD anytime via Side Pane + -> Telemetry HUD)">PILL: ON</button>
             </div>
           </div>
         </section>
@@ -1358,7 +1358,7 @@
           }
           try {
             const initRes = await sendRpcRequest("ui/initialize", {
-              appInfo: { name: "telemetry-hud", version: "0.3.1" },
+              appInfo: { name: "telemetry-hud", version: "0.3.2" },
               appCapabilities: {},
               protocolVersion: "2026-01-26",
             });

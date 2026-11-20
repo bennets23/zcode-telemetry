@@ -1,6 +1,6 @@
 {
   "name": "telemetry-hud",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Live token throughput, calibrated context X-ray, prompt cache efficiency, subagent tracing, and tool/model latency telemetry for ZCode.",
   "author": {
     "name": "bennets23"
@@ -27,6 +27,10 @@
           "title": "Open Telemetry HUD"
         },
         {
+          "id": "pill-click",
+          "title": "Telemetry Pill Click"
+        },
+        {
           "id": "cycle-pill-mode",
           "title": "Cycle Status Pill Mode"
         },
@@ -49,7 +53,7 @@
       {
         "id": "live-pill",
         "target": {
-          "command": "open-dashboard"
+          "command": "pill-click"
         },
         "title": "Telemetry HUD",
         "icon": "activity",

@@ -420,6 +420,12 @@ export async function activate(ctx, overrides = {}) {
   if (ctx?.commands?.register) {
     disposables.push(
       ctx.commands.register("open-dashboard", async ({ scope }) => {
+        await ctx.views.open("dashboard", toViewOpenScope(scope));
+      }),
+    );
+
+    disposables.push(
+      ctx.commands.register("pill-click", async ({ scope }) => {
         const action = store.getPrefs().pillClickAction;
         if (action === "cycle-mode") {
           const current = store.getPrefs().pillMode;
@@ -649,7 +655,7 @@ export async function activate(ctx, overrides = {}) {
     },
   };
 
-  ctx?.log?.info?.("Telemetry HUD 0.3.1 activated");
+  ctx?.log?.info?.("Telemetry HUD 0.3.2 activated");
   return activeRuntime;
 }
 

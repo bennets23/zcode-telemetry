@@ -64,7 +64,7 @@ function createHarness(dbPath, { allowGrant = false } = {}) {
   };
 
   const mockCtx = {
-    extension: { id: "telemetry-hud@zcode-telemetry", version: "0.3.1", path: PLUGIN_ROOT, dataPath: path.dirname(dbPath) },
+    extension: { id: "telemetry-hud@zcode-telemetry", version: "0.3.2", path: PLUGIN_ROOT, dataPath: path.dirname(dbPath) },
     log: { info() {}, warn() {}, error() {} },
     models: {
       onDidGenerate(fn) {
@@ -152,7 +152,7 @@ function createHarness(dbPath, { allowGrant = false } = {}) {
   return { mockCtx, slotUpdates, openedViews, commands, views, listeners };
 }
 
-test("manifests conform to ZCode 3.18.2 strict extension and slot schemas at 0.3.1", () => {
+test("manifests conform to ZCode 3.18.2 strict extension and slot schemas at 0.3.2", () => {
   const market = JSON.parse(readFileSync(path.join(REPO_ROOT, "marketplace.json"), "utf8"));
   const manifest = JSON.parse(
     readFileSync(path.join(PLUGIN_ROOT, ".zcode-plugin", "plugin.json"), "utf8"),
@@ -162,7 +162,7 @@ test("manifests conform to ZCode 3.18.2 strict extension and slot schemas at 0.3
   assert.match(licenseText, ASCII_ONLY_RE);
   assert.ok(licenseText.includes("MIT License"));
   assert.equal(market.name, "zcode-telemetry");
-  assert.equal(manifest.version, "0.3.1");
+  assert.equal(manifest.version, "0.3.2");
   assert.equal(manifest.author?.name, "bennets23");
   assert.equal(market.plugins.length, 1);
   assert.equal(market.plugins[0].name, manifest.name);
@@ -177,6 +177,7 @@ test("manifests conform to ZCode 3.18.2 strict extension and slot schemas at 0.3
   assert.deepEqual(ext.protocols, { sessions: 1, rows: 4 });
 
   const cmdIds = new Set(ext.contributes.commands.map((c) => c.id));
+  assert.ok(cmdIds.has("pill-click"));
   const viewIds = new Set(ext.contributes.views.map((v) => v.id));
   for (const id of [...cmdIds, ...viewIds]) {
     assert.match(id, /^[a-z0-9._-]{1,64}$/);
@@ -186,6 +187,7 @@ test("manifests conform to ZCode 3.18.2 strict extension and slot schemas at 0.3
   assert.equal(manifest.slots["composer.status"].length, 1);
   const pill = manifest.slots["composer.status"][0];
   assert.match(pill.id, /^[a-z0-9._-]{1,64}$/);
+  assert.equal(pill.target.command, "pill-click");
   assert.ok(cmdIds.has(pill.target.command));
 
   assert.equal(manifest.slots["sidePane.launcher"].length, 1);
@@ -226,7 +228,7 @@ test("entire repository contains zero emojis, non-ASCII chars, comments, or pers
 test("dashboard.html implements MCP Apps handshake, pro metric tables, session pin, and click config", () => {
   const html = readFileSync(path.join(PLUGIN_ROOT, "views", "dashboard.html"), "utf8");
   assert.ok(html.includes('"ui/initialize"'));
-  assert.ok(html.includes('"0.3.1"'));
+  assert.ok(html.includes('"0.3.2"'));
   assert.ok(html.includes('"ui/notifications/initialized"'));
   assert.ok(html.includes('"resources/subscribe"'));
   assert.ok(html.includes('"telemetry://snapshot"'));
@@ -292,10 +294,14 @@ test("activate(ctx) streams Edit toolCall deltas, drops to 0 t/s when idle, and 
 
     await viewDef.tools.set_preferences.run({ pillClickAction: "cycle-mode" }, { view: fakeView });
     const openCountBefore = openedViews.length;
-    await commands.get("open-dashboard")({
+    await commands.get("pill-click")({
       scope: { kind: "session", workspace: { workspacePath: "/tmp/ws" }, sessionId: "sess_live" },
     });
     assert.equal(openedViews.length, openCountBefore);
+    await commands.get("open-dashboard")({
+      scope: { kind: "session", workspace: { workspacePath: "/tmp/ws" }, sessionId: "sess_live" },
+    });
+    assert.equal(openedViews.length, openCountBefore + 1);
 
     deactivate();
     assert.equal(commands.size, 0);
