@@ -73,6 +73,7 @@ export async function activate(ctx, overrides = {}) {
   const viewCloseSubs = new Map();
   const sqliteFlushTimers = new Map();
   const sessionSubs = new Map();
+  let listSub = null;
   let viewNotifyTimer = null;
   let livePollTimer = null;
   let activeTickTimer = null;
@@ -143,7 +144,8 @@ export async function activate(ctx, overrides = {}) {
   function hasActiveTurn() {
     for (const sess of store.getVisibleSessions()) {
       if (!sess.sessionId) continue;
-      if (liveSession.get(sess.sessionId).isActiveTurn) return true;
+      const live = liveSession.get(sess.sessionId);
+      if (live.isActiveTurn || live.waitingForUser) return true;
       if (throughput.get(sess.sessionId).phase === "streaming") return true;
     }
     return false;
@@ -164,7 +166,9 @@ export async function activate(ctx, overrides = {}) {
     if (shouldTick && activeTickTimer === null) {
       activeTickTimer = setLoop(() => {
         for (const sess of store.getVisibleSessions()) {
-          if (sess.sessionId && liveSession.get(sess.sessionId).isActiveTurn) {
+          if (!sess.sessionId) continue;
+          const live = liveSession.get(sess.sessionId);
+          if (live.isActiveTurn || live.waitingForUser) {
             updateSlotForSession(sess.sessionId);
           }
         }
@@ -250,9 +254,64 @@ export async function activate(ctx, overrides = {}) {
     }
   }
 
+  function clearListSub() {
+    if (listSub) {
+      const sub = listSub;
+      listSub = null;
+      try {
+        sub.dispose?.();
+      } catch {
+      }
+    }
+  }
+
   function clearAllSessionSubs() {
+    clearListSub();
     for (const sessionId of [...sessionSubs.keys()]) {
       unsubscribeSession(sessionId);
+    }
+  }
+
+  function ensureListSubscription() {
+    if (listSub || sessionsReadState === "denied" || !ctx?.sessions?.onDidChangeList) {
+      return;
+    }
+
+    let subFailed = false;
+    const handleListError = (err) => {
+      subFailed = true;
+      if (isNotGrantedError(err)) {
+        sessionsReadState = "denied";
+        clearAllSessionSubs();
+        scheduleViewNotification();
+        return;
+      }
+      clearListSub();
+    };
+
+    try {
+      const sub = ctx.sessions.onDidChangeList((ev) => {
+        sessionsReadState = "granted";
+        const { changedIds } = liveSession.onListChange(ev);
+        for (const sid of changedIds) {
+          if (liveSession.get(sid).waitingForUser) {
+            throughput.markIdle(sid);
+          }
+          updateSlotForSession(sid);
+        }
+        if (changedIds.length > 0) {
+          scheduleViewNotification();
+          syncTimers();
+        }
+      }, handleListError);
+
+      if (subFailed || sessionsReadState === "denied") {
+        sub?.dispose?.();
+        return;
+      }
+      listSub = sub;
+    } catch (err) {
+      handleListError(err);
     }
   }
 
@@ -306,7 +365,9 @@ export async function activate(ctx, overrides = {}) {
         (ev) => {
           sessionsReadState = "granted";
           const res = liveSession.onRowsChange(sessionId, ev);
-          if (res.toolInputTps !== null) {
+          if (res.waitingForUser) {
+            throughput.markIdle(sessionId);
+          } else if (res.toolInputTps !== null) {
             throughput.recordStreamSample(sessionId, {
               tps: res.toolInputTps,
               channel: "tool_input",
@@ -338,6 +399,7 @@ export async function activate(ctx, overrides = {}) {
   }
 
   function syncSessionSubscriptions(sessions) {
+    ensureListSubscription();
     const activeIds = new Set(
       (sessions || [])
         .filter((s) => s?.sessionId && !s.isDraft)
@@ -655,7 +717,7 @@ export async function activate(ctx, overrides = {}) {
     },
   };
 
-  ctx?.log?.info?.("Telemetry HUD 0.3.2 activated");
+  ctx?.log?.info?.("Telemetry HUD 0.3.3 activated");
   return activeRuntime;
 }
 

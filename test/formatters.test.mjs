@@ -11,6 +11,7 @@ import {
   formatPillText,
   formatPillTooltip,
   formatTokens,
+  resolveDisplayTps,
 } from "../plugins/telemetry-hud/src/formatters.mjs";
 
 const ASCII_ONLY_RE = /^[\x20-\x7E\n]*$/;
@@ -112,9 +113,54 @@ test("formatPillText shows 0 t/s when idle, live streaming states, stall/tool, a
     }),
     "APPROVE | 51%",
   );
+
+  assert.equal(
+    formatPillText({
+      throughput: { phase: "streaming", rawTps: 220, lastValidTps: 229 },
+      context: ctx,
+      liveSession: {
+        isIdle: false,
+        isActiveTurn: true,
+        waitingForUser: true,
+        userWaitMs: 18000,
+        stalledWaitMs: 0,
+        activity: { kind: "question", label: "ASK" },
+      },
+      prefs: { pillMode: "compact" },
+    }),
+    "ASK | 51%",
+  );
+
+  assert.equal(
+    formatPillText({
+      throughput: { phase: "idle", lastValidTps: 229 },
+      context: ctx,
+      liveSession: {
+        isIdle: false,
+        isActiveTurn: true,
+        waitingForUser: true,
+        userWaitMs: 4000,
+        stalledWaitMs: 0,
+        activity: { kind: "question", label: "INPUT" },
+      },
+      prefs: { pillMode: "compact" },
+    }),
+    "INPUT | 51%",
+  );
+
+  const waitResolved = resolveDisplayTps(
+    { phase: "streaming", rawTps: 220, emaTps: 225, lastValidTps: 229 },
+    null,
+    true,
+    { isIdle: false, isActiveTurn: true, waitingForUser: true },
+  );
+  assert.equal(waitResolved.tps, 0);
+  assert.equal(waitResolved.live, false);
+  assert.equal(waitResolved.waitingForUser, true);
+  assert.equal(waitResolved.lastTps, 229);
 });
 
-test("formatPillTooltip displays idle history, subagent info, and click mode within <= 200 ASCII chars", () => {
+test("formatPillTooltip displays idle history, subagent info, question wait, and click mode within <= 200 ASCII chars", () => {
   const tip = formatPillTooltip({
     throughput: { phase: "idle", lastValidTps: 127.4, lastTtftMs: 668, model: { modelId: "glm-5.3-flash" } },
     context: { usedPct: 51.1, usedTokens: 134000, contextWindow: 262000 },
@@ -129,6 +175,22 @@ test("formatPillTooltip displays idle history, subagent info, and click mode wit
   assert.ok(tip.includes("0 t/s (last 127, med 149)"));
   assert.ok(tip.includes("1 bg agent [Bash]"));
   assert.ok(tip.includes("click: cycle"));
+
+  const askTip = formatPillTooltip({
+    throughput: { phase: "idle", lastValidTps: 228.7, model: { modelId: "glm-5.3-flash" } },
+    context: { usedPct: 62.6, usedTokens: 164000, contextWindow: 262000 },
+    liveSession: {
+      isIdle: false,
+      isActiveTurn: true,
+      waitingForUser: true,
+      userWaitMs: 18000,
+      stalledWaitMs: 0,
+      activity: { kind: "question", label: "ASK" },
+    },
+    prefs: { smoothing: true },
+  });
+  assert.match(askTip, ASCII_ONLY_RE);
+  assert.ok(askTip.includes("ASK (waiting 18s, last 229)"));
 
   const huge = formatPillTooltip({
     throughput: { phase: "streaming", emaTps: 140, model: { modelId: `m-${"x".repeat(250)}\u{1F680}` } },

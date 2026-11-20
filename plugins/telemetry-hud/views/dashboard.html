@@ -114,6 +114,10 @@
         background: var(--muted);
       }
 
+      .dot.warn {
+        background: var(--warn);
+      }
+
       @keyframes blink {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.25; }
@@ -878,24 +882,37 @@
           const subagents = snapshot.sqlite?.subagents || null;
           const benchmarks = snapshot.sqlite?.benchmarks || [];
 
-          const isStreaming = tp.phase === "streaming";
+          const isWaitingUser = Boolean(
+            liveSess?.waitingForUser
+            || liveSess?.activity?.kind === "question"
+            || liveSess?.activity?.kind === "approval",
+          );
+          const isStreaming = tp.phase === "streaming" && !isWaitingUser;
           const isIdle = liveSess?.isIdle === true || (tp.phase === "idle" && !liveSess?.isActiveTurn);
-          const isStalled = Boolean(liveSess?.isActiveTurn && liveSess?.stalledWaitMs >= 8000 && !isStreaming);
+          const isStalled = Boolean(
+            !isWaitingUser
+            && liveSess?.isActiveTurn
+            && liveSess?.stalledWaitMs >= 8000
+            && !isStreaming,
+          );
           const lastTps = tp.lastValidTps ?? tp.rawTps ?? sess?.latest?.tps ?? null;
 
           let displayTps;
           if (isStreaming) {
             displayTps = prefs.smoothing !== false ? (tp.emaTps ?? tp.rawTps) : tp.rawTps;
-          } else if (isIdle) {
+          } else if (isIdle || isWaitingUser || liveSess?.isActiveTurn) {
             displayTps = 0;
           } else {
             displayTps = tp.rawTps ?? sess?.latest?.tps ?? 0;
           }
 
-          el("dot").className = `dot ${isStreaming ? "live" : (liveSess?.isActiveTurn ? "active" : "")}`;
+          el("dot").className = `dot ${isStreaming ? "live" : (isWaitingUser ? "warn" : (liveSess?.isActiveTurn ? "active" : ""))}`;
 
           const badge = el("state-badge");
-          if (isStalled) {
+          if (isWaitingUser) {
+            badge.textContent = liveSess?.activity?.label || "ASK";
+            badge.className = "badge warn";
+          } else if (isStalled) {
             badge.textContent = `WAIT ${Math.round(liveSess.stalledWaitMs / 1000)}S`;
             badge.className = "badge warn";
           } else if (liveSess?.isActiveTurn && liveSess.activity?.kind && liveSess.activity.kind !== "idle") {
@@ -909,10 +926,15 @@
           el("model-name").textContent = tp.model?.modelId || sess?.latest?.modelId || ctx?.modelId || "--";
 
           const reqCount = sess?.totals?.requestCount || 0;
-          const turnStr = liveSess?.isActiveTurn && liveSess.turnElapsedMs > 0
-            ? `turn ${fmtDuration(liveSess.turnElapsedMs)} | `
-            : "";
-          el("req-meta").textContent = `${turnStr}${reqCount} reqs`;
+          let timingPrefix = "";
+          if (isWaitingUser) {
+            timingPrefix = liveSess?.userWaitMs >= 1000
+              ? `awaiting input ${fmtDuration(liveSess.userWaitMs)} | `
+              : "awaiting input | ";
+          } else if (liveSess?.isActiveTurn && liveSess.turnElapsedMs > 0) {
+            timingPrefix = `turn ${fmtDuration(liveSess.turnElapsedMs)} | `;
+          }
+          el("req-meta").textContent = `${timingPrefix}${reqCount} reqs`;
           el("hero-tps").textContent = fmtTps(displayTps);
           const medTps = sess?.totals?.medianTps ?? tp.baselineTps ?? null;
           el("stat-last").textContent = fmtTps(lastTps);
@@ -1358,7 +1380,7 @@
           }
           try {
             const initRes = await sendRpcRequest("ui/initialize", {
-              appInfo: { name: "telemetry-hud", version: "0.3.2" },
+              appInfo: { name: "telemetry-hud", version: "0.3.3" },
               appCapabilities: {},
               protocolVersion: "2026-01-26",
             });

@@ -1,6 +1,6 @@
 # ZCode Telemetry HUD
 
-![Version](https://img.shields.io/badge/version-0.3.2-555555)
+![Version](https://img.shields.io/badge/version-0.3.3-555555)
 ![ZCode API](https://img.shields.io/badge/ZCode_API-%5E1.4.0-0969da)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-0969da)
 ![Dependencies](https://img.shields.io/badge/dependencies-zero-2ea043)
@@ -21,7 +21,7 @@ Telemetry HUD :  [IDLE] glm-5.3-flash                    [+ FULL] [MONO] [COPY] 
 
 | Feature | Details |
 | :--- | :--- |
-| **Live Throughput** | Tracks `models.onDidGenerate` plus live `Edit`/`Write` `inputStreaming`, true `0 t/s` idle transitions, stall `WAIT` detection (`>= 8s`), and 3-sample median + EMA smoothing (`alpha = 0.22`) that filters micro-bursts. |
+| **Live Throughput** | Tracks `models.onDidGenerate` plus live `Edit`/`Write` `inputStreaming`, true `0 t/s` idle and `ASK`/`APPROVE`/`INPUT` user-wait detection, stall `WAIT` alerts (`>= 8s`), and 3-sample median + EMA smoothing (`alpha = 0.22`). |
 | **Context X-Ray** | Calibrates `draft-preview` estimates against prior provider token ratios, normalizes category shares to `100%`, and estimates remaining turn `runway` to the 85% threshold. |
 | **Subagent Tracer** | Merges real-time `subagent` row events with child SQLite sessions (`parent_id`): state (`RUN`/`DONE`/`ERR`), task, active tool, request/tool counts, output tokens, median `tok/s`, and elapsed time. |
 | **Tokens & Cache** | Reconciles OpenAI/Z.ai inclusive and Anthropic exclusive prompt cache accounting via `provider_total_tokens`, surfacing fresh input, cache read/write, reasoning %, and `in:out` ratio. |

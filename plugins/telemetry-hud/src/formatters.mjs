@@ -55,14 +55,26 @@ export function formatTps(tps, decimals = 1) {
 
 export function resolveDisplayTps(throughput, sqliteLatest, smoothing = true, liveSession = null) {
   const lastValid = throughput?.lastValidTps ?? throughput?.rawTps ?? sqliteLatest?.tps ?? null;
+  const waitingForUser = liveSession?.waitingForUser === true;
 
-  if (throughput?.phase === "streaming") {
+  if (throughput?.phase === "streaming" && !waitingForUser) {
     const val = smoothing ? (throughput.emaTps ?? throughput.rawTps) : throughput.rawTps;
     return {
       tps: typeof val === "number" ? val : 0,
       live: true,
       idle: false,
+      waitingForUser: false,
       lastTps: lastValid,
+    };
+  }
+
+  if (waitingForUser) {
+    return {
+      tps: 0,
+      live: false,
+      idle: false,
+      waitingForUser: true,
+      lastTps: typeof lastValid === "number" ? lastValid : null,
     };
   }
 
@@ -73,17 +85,28 @@ export function resolveDisplayTps(throughput, sqliteLatest, smoothing = true, li
       tps: 0,
       live: false,
       idle: true,
+      waitingForUser: false,
+      lastTps: typeof lastValid === "number" ? lastValid : null,
+    };
+  }
+
+  if (liveSession?.isActiveTurn) {
+    return {
+      tps: 0,
+      live: false,
+      idle: false,
+      waitingForUser: false,
       lastTps: typeof lastValid === "number" ? lastValid : null,
     };
   }
 
   if (throughput?.phase === "final" && typeof throughput.rawTps === "number") {
-    return { tps: throughput.rawTps, live: false, idle: false, lastTps: throughput.rawTps };
+    return { tps: throughput.rawTps, live: false, idle: false, waitingForUser: false, lastTps: throughput.rawTps };
   }
   if (typeof sqliteLatest?.tps === "number") {
-    return { tps: sqliteLatest.tps, live: false, idle: false, lastTps: sqliteLatest.tps };
+    return { tps: sqliteLatest.tps, live: false, idle: false, waitingForUser: false, lastTps: sqliteLatest.tps };
   }
-  return { tps: 0, live: false, idle: true, lastTps: null };
+  return { tps: 0, live: false, idle: true, waitingForUser: false, lastTps: null };
 }
 
 function joinPillParts(base, ctxPart, runningAgents) {
@@ -112,10 +135,12 @@ export function formatPillText({ throughput, context, sqliteLatest, subagents, l
   const ctxPart = typeof context?.usedPct === "number" ? `${Math.round(context.usedPct)}%` : null;
 
   let base;
-  if (liveSession?.isActiveTurn && liveSession?.stalledWaitMs >= 8000 && !live) {
-    base = `WAIT ${formatShortSec(liveSession.stalledWaitMs)}`;
-  } else if (liveSession?.isActiveTurn && liveSession?.activity?.kind === "approval") {
+  if (liveSession?.activity?.kind === "approval") {
     base = "APPROVE";
+  } else if (liveSession?.activity?.kind === "question" || liveSession?.waitingForUser) {
+    base = liveSession?.activity?.label === "INPUT" ? "INPUT" : "ASK";
+  } else if (liveSession?.isActiveTurn && liveSession?.stalledWaitMs >= 8000 && !live) {
+    base = `WAIT ${formatShortSec(liveSession.stalledWaitMs)}`;
   } else if (liveSession?.isActiveTurn && liveSession?.activity?.kind === "tool_running") {
     base = shortToolLabel(liveSession.activity.toolName);
   } else if (live) {
@@ -146,7 +171,21 @@ export function formatPillTooltip({ throughput, context, sqliteSession, sqliteLa
 
   const parts = [modelName];
 
-  if (liveSession?.isActiveTurn && liveSession?.stalledWaitMs >= 8000 && !live) {
+  if (
+    liveSession?.waitingForUser
+    || liveSession?.activity?.kind === "question"
+    || liveSession?.activity?.kind === "approval"
+  ) {
+    const act = liveSession?.activity?.label || "ASK";
+    const tipBits = [];
+    if (typeof liveSession?.userWaitMs === "number" && liveSession.userWaitMs >= 1000) {
+      tipBits.push(`waiting ${formatShortSec(liveSession.userWaitMs)}`);
+    }
+    if (typeof lastTps === "number" && lastTps > 0) {
+      tipBits.push(`last ${formatTps(lastTps, 0)}`);
+    }
+    parts.push(tipBits.length ? `${act} (${tipBits.join(", ")})` : act);
+  } else if (liveSession?.isActiveTurn && liveSession?.stalledWaitMs >= 8000 && !live) {
     parts.push(`WAIT ${formatShortSec(liveSession.stalledWaitMs)}`);
   } else if (liveSession?.isActiveTurn && liveSession?.activity?.kind && liveSession.activity.kind !== "idle") {
     const act = liveSession.activity.label || "ACTIVE";
@@ -230,7 +269,7 @@ export function formatAsciiReport(snapshot) {
   lines.push("");
 
   lines.push("--- THROUGHPUT & LATENCY ---");
-  lines.push(`State   : ${live ? "STREAMING" : (idle ? "IDLE" : "ACTIVE")}`);
+  lines.push(`State   : ${liveSess?.waitingForUser ? "WAITING FOR USER" : (live ? "STREAMING" : (idle ? "IDLE" : "ACTIVE"))}`);
   lines.push(`Speed   : ${formatTps(tps)} tok/s (last ${formatTps(lastTps)} | med ${formatTps(sess?.totals?.medianTps)} | peak ${formatTps(tp?.peakTps)})`);
   lines.push(`TTFT    : ${formatDuration(tp?.lastTtftMs ?? sess?.latest?.cleanTtftMs)}`);
   lines.push(`Last Out: ${formatTokens(tp?.lastOutputTokens ?? sess?.latest?.outputTokens)} tokens`);

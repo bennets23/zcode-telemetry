@@ -8,10 +8,16 @@ const MAX_TRACKED_SESSIONS = 64;
 const MAX_ROW_LENGTHS = 2000;
 
 const ACTIVE_PHASES = new Set(["running", "prewarming"]);
+const QUESTION_TOOL_RE = /^(?:ask_?user_?question|ask_?question|ask_?user)$/i;
+
+export function isQuestionTool(toolName) {
+  return QUESTION_TOOL_RE.test(String(toolName || "").trim());
+}
 
 export function shortToolLabel(toolName) {
   const name = String(toolName || "").trim();
   if (!name) return "TOOL";
+  if (isQuestionTool(name)) return "ASK";
   if (name === "Edit" || name === "MultiEdit" || name === "NotebookEdit") return "EDIT";
   if (name === "Write") return "WRITE";
   if (name === "Bash") return "BASH";
@@ -27,6 +33,8 @@ function createEmptyEntry(sessionId) {
     isActiveTurn: false,
     turnStartedAt: null,
     lastChunkAt: null,
+    needsAttention: false,
+    attentionSinceAt: null,
     activity: { kind: "idle", label: "IDLE", toolName: null, sinceAt: 0 },
     rowLengths: new Map(),
     editWindow: [],
@@ -79,17 +87,27 @@ export function createLiveSessionTracker(options = {}) {
     return entry;
   }
 
+  function isEntryWaitingForUser(entry) {
+    return entry.needsAttention || entry.activity.kind === "question" || entry.activity.kind === "approval";
+  }
+
   function snapshot(entry) {
     const ts = now();
     const turnElapsedMs = entry.isActiveTurn && entry.turnStartedAt !== null
       ? Math.max(0, ts - entry.turnStartedAt)
       : 0;
 
+    const waitingForUser = isEntryWaitingForUser(entry);
+    const waitAnchor = (entry.activity.kind === "question" || entry.activity.kind === "approval")
+      ? (entry.activity.sinceAt || entry.attentionSinceAt)
+      : entry.attentionSinceAt;
+    const userWaitMs = waitingForUser && waitAnchor != null ? Math.max(0, ts - waitAnchor) : 0;
+
     let stalledWaitMs = 0;
     if (
       entry.isActiveTurn
+      && !waitingForUser
       && entry.activity.kind !== "tool_running"
-      && entry.activity.kind !== "approval"
     ) {
       const waitRef = entry.lastChunkAt ?? entry.turnStartedAt;
       if (waitRef !== null) {
@@ -105,6 +123,9 @@ export function createLiveSessionTracker(options = {}) {
       conversationPhase: entry.conversationPhase,
       isActiveTurn: entry.isActiveTurn,
       isIdle: entry.conversationPhase !== null && !entry.isActiveTurn,
+      needsAttention: entry.needsAttention,
+      waitingForUser,
+      userWaitMs,
       turnStartedAt: entry.turnStartedAt,
       turnElapsedMs,
       lastChunkAt: entry.lastChunkAt,
@@ -140,6 +161,10 @@ export function createLiveSessionTracker(options = {}) {
           return;
         }
         if (row.status === "running") {
+          if (isQuestionTool(row.toolName)) {
+            entry.activity = { kind: "question", label: "ASK", toolName: row.toolName || null, sinceAt: ts };
+            return;
+          }
           entry.activity = { kind: "tool_running", label: `TOOL:${row.toolName || "tool"}`, toolName: row.toolName || null, sinceAt: ts };
           return;
         }
@@ -177,19 +202,82 @@ export function createLiveSessionTracker(options = {}) {
       entry.turnStartedAt = ts;
       entry.lastChunkAt = null;
       entry.editWindow = [];
-      entry.activity = { kind: "waiting", label: "WAIT", toolName: null, sinceAt: ts };
+      if (!entry.needsAttention) {
+        entry.activity = { kind: "waiting", label: "WAIT", toolName: null, sinceAt: ts };
+      }
     } else if (!nextActive) {
       entry.turnStartedAt = null;
       entry.editWindow = [];
+      entry.needsAttention = false;
+      entry.attentionSinceAt = null;
       entry.activity = { kind: "idle", label: "IDLE", toolName: null, sinceAt: ts };
     }
 
     return { becameIdle, becameActive, state: snapshot(entry) };
   }
 
+  function onListChange(event) {
+    if (!event || typeof event !== "object") {
+      return { changedIds: [] };
+    }
+    const ts = now();
+    const changedIds = new Set();
+
+    const listItems = event.kind === "snapshot" && Array.isArray(event.sessions)
+      ? event.sessions
+      : (event.kind === "delta" && Array.isArray(event.upserted) ? event.upserted : []);
+
+    for (const item of listItems) {
+      const sid = item?.session?.sessionId;
+      if (typeof sid !== "string" || !sid) continue;
+      const nextAttention = item.status === "needs_attention";
+      if (!nextAttention && !entries.has(sid)) continue;
+
+      const entry = getOrCreate(sid);
+      if (entry.needsAttention !== nextAttention) {
+        entry.needsAttention = nextAttention;
+        entry.attentionSinceAt = nextAttention ? ts : null;
+        changedIds.add(sid);
+        if (nextAttention) {
+          entry.editWindow = [];
+          if (entry.activity.kind !== "question" && entry.activity.kind !== "approval") {
+            entry.activity = { kind: "question", label: "INPUT", toolName: null, sinceAt: ts };
+          }
+        } else if (entry.activity.kind === "question" && entry.activity.label === "INPUT") {
+          entry.activity = entry.isActiveTurn
+            ? { kind: "waiting", label: "WAIT", toolName: null, sinceAt: ts }
+            : { kind: "idle", label: "IDLE", toolName: null, sinceAt: ts };
+          if (entry.isActiveTurn) {
+            entry.lastChunkAt = ts;
+          }
+        }
+      }
+    }
+
+    if (event.kind === "delta" && Array.isArray(event.removed)) {
+      for (const ref of event.removed) {
+        const sid = ref?.sessionId;
+        if (typeof sid !== "string" || !sid || !entries.has(sid)) continue;
+        const entry = entries.get(sid);
+        if (entry.needsAttention) {
+          entry.needsAttention = false;
+          entry.attentionSinceAt = null;
+          changedIds.add(sid);
+          if (entry.activity.kind === "question" && entry.activity.label === "INPUT") {
+            entry.activity = entry.isActiveTurn
+              ? { kind: "waiting", label: "WAIT", toolName: null, sinceAt: ts }
+              : { kind: "idle", label: "IDLE", toolName: null, sinceAt: ts };
+          }
+        }
+      }
+    }
+
+    return { changedIds: [...changedIds] };
+  }
+
   function onRowsChange(sessionId, event) {
     if (!sessionId || !event || typeof event !== "object") {
-      return { toolInputTps: null, toolName: null, subagentsChanged: false, state: null };
+      return { toolInputTps: null, toolName: null, subagentsChanged: false, waitingForUser: false, state: null };
     }
     const entry = getOrCreate(sessionId);
     const ts = now();
@@ -214,12 +302,19 @@ export function createLiveSessionTracker(options = {}) {
         toolInputTps: null,
         toolName: null,
         subagentsChanged: entry.liveSubagents.size > 0,
+        waitingForUser: isEntryWaitingForUser(entry),
         state: snapshot(entry),
       };
     }
 
     if (event.kind !== "rows" || !Array.isArray(event.upserted)) {
-      return { toolInputTps: null, toolName: null, subagentsChanged: false, state: snapshot(entry) };
+      return {
+        toolInputTps: null,
+        toolName: null,
+        subagentsChanged: false,
+        waitingForUser: isEntryWaitingForUser(entry),
+        state: snapshot(entry),
+      };
     }
 
     let toolInputTps = null;
@@ -269,25 +364,38 @@ export function createLiveSessionTracker(options = {}) {
           }
         } else if (row.status === "running") {
           entry.editWindow = [];
-          const sameTool = entry.activity.kind === "tool_running" && entry.activity.toolName === row.toolName;
-          entry.activity = {
-            kind: "tool_running",
-            label: `TOOL:${row.toolName || "tool"}`,
-            toolName: row.toolName || null,
-            sinceAt: sameTool ? entry.activity.sinceAt : ts,
-          };
+          if (isQuestionTool(row.toolName)) {
+            const sameQuestion = entry.activity.kind === "question" && entry.activity.toolName === row.toolName;
+            entry.activity = {
+              kind: "question",
+              label: "ASK",
+              toolName: row.toolName || null,
+              sinceAt: sameQuestion ? entry.activity.sinceAt : ts,
+            };
+          } else {
+            const sameTool = entry.activity.kind === "tool_running" && entry.activity.toolName === row.toolName;
+            entry.activity = {
+              kind: "tool_running",
+              label: `TOOL:${row.toolName || "tool"}`,
+              toolName: row.toolName || null,
+              sinceAt: sameTool ? entry.activity.sinceAt : ts,
+            };
+          }
         } else if (row.status === "pendingApproval") {
           entry.editWindow = [];
+          const sameApproval = entry.activity.kind === "approval" && entry.activity.toolName === row.toolName;
           entry.activity = {
             kind: "approval",
             label: "APPROVE",
             toolName: row.toolName || null,
-            sinceAt: ts,
+            sinceAt: sameApproval ? entry.activity.sinceAt : ts,
           };
         } else {
           entry.editWindow = [];
           if (entry.isActiveTurn && entry.activity.toolName === row.toolName) {
-            entry.activity = { kind: "waiting", label: "WAIT", toolName: null, sinceAt: ts };
+            entry.activity = entry.needsAttention
+              ? { kind: "question", label: "INPUT", toolName: null, sinceAt: entry.attentionSinceAt || ts }
+              : { kind: "waiting", label: "WAIT", toolName: null, sinceAt: ts };
             entry.lastChunkAt = ts;
           }
         }
@@ -327,6 +435,7 @@ export function createLiveSessionTracker(options = {}) {
       toolInputTps,
       toolName: activeToolName,
       subagentsChanged,
+      waitingForUser: isEntryWaitingForUser(entry),
       state: snapshot(entry),
     };
   }
@@ -352,6 +461,8 @@ export function createLiveSessionTracker(options = {}) {
       entry.isActiveTurn = false;
       entry.turnStartedAt = null;
       entry.editWindow = [];
+      entry.needsAttention = false;
+      entry.attentionSinceAt = null;
       entry.activity = { kind: "idle", label: "IDLE", toolName: null, sinceAt: ts };
       return { becameIdle: true, state: snapshot(entry) };
     }
@@ -370,6 +481,7 @@ export function createLiveSessionTracker(options = {}) {
 
   return {
     onConversationChange,
+    onListChange,
     onRowsChange,
     noteModelChunk,
     noteModelFinal,

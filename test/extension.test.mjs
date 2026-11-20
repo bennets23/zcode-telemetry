@@ -61,10 +61,12 @@ function createHarness(dbPath, { allowGrant = false } = {}) {
     onConvErr: null,
     onRowsChange: null,
     onRowsErr: null,
+    onListChange: null,
+    onListErr: null,
   };
 
   const mockCtx = {
-    extension: { id: "telemetry-hud@zcode-telemetry", version: "0.3.2", path: PLUGIN_ROOT, dataPath: path.dirname(dbPath) },
+    extension: { id: "telemetry-hud@zcode-telemetry", version: "0.3.3", path: PLUGIN_ROOT, dataPath: path.dirname(dbPath) },
     log: { info() {}, warn() {}, error() {} },
     models: {
       onDidGenerate(fn) {
@@ -73,6 +75,15 @@ function createHarness(dbPath, { allowGrant = false } = {}) {
       },
     },
     sessions: {
+      onDidChangeList(fn, onErr) {
+        if (!grantAllowed) {
+          onErr?.({ code: "not-granted", message: "sessions.onDidChangeList needs sessions.read" });
+          return { dispose() {} };
+        }
+        listeners.onListChange = fn;
+        listeners.onListErr = onErr;
+        return { dispose() { listeners.onListChange = null; } };
+      },
       onDidChangeConversation(_input, fn, onErr) {
         if (!grantAllowed) {
           onErr?.({ code: "not-granted", message: "sessions.onDidChangeConversation needs sessions.read" });
@@ -152,7 +163,7 @@ function createHarness(dbPath, { allowGrant = false } = {}) {
   return { mockCtx, slotUpdates, openedViews, commands, views, listeners };
 }
 
-test("manifests conform to ZCode 3.18.2 strict extension and slot schemas at 0.3.2", () => {
+test("manifests conform to ZCode 3.18.2 strict extension and slot schemas at 0.3.3", () => {
   const market = JSON.parse(readFileSync(path.join(REPO_ROOT, "marketplace.json"), "utf8"));
   const manifest = JSON.parse(
     readFileSync(path.join(PLUGIN_ROOT, ".zcode-plugin", "plugin.json"), "utf8"),
@@ -162,7 +173,7 @@ test("manifests conform to ZCode 3.18.2 strict extension and slot schemas at 0.3
   assert.match(licenseText, ASCII_ONLY_RE);
   assert.ok(licenseText.includes("MIT License"));
   assert.equal(market.name, "zcode-telemetry");
-  assert.equal(manifest.version, "0.3.2");
+  assert.equal(manifest.version, "0.3.3");
   assert.equal(manifest.author?.name, "bennets23");
   assert.equal(market.plugins.length, 1);
   assert.equal(market.plugins[0].name, manifest.name);
@@ -228,7 +239,7 @@ test("entire repository contains zero emojis, non-ASCII chars, comments, or pers
 test("dashboard.html implements MCP Apps handshake, pro metric tables, session pin, and click config", () => {
   const html = readFileSync(path.join(PLUGIN_ROOT, "views", "dashboard.html"), "utf8");
   assert.ok(html.includes('"ui/initialize"'));
-  assert.ok(html.includes('"0.3.2"'));
+  assert.ok(html.includes('"0.3.3"'));
   assert.ok(html.includes('"ui/notifications/initialized"'));
   assert.ok(html.includes('"resources/subscribe"'));
   assert.ok(html.includes('"telemetry://snapshot"'));
@@ -351,6 +362,84 @@ test("when sessions.read is not granted, models.onDidGenerate final drops cleanl
     );
     assert.equal(snap.live.isActiveTurn, false);
     assert.equal(snap.live.stalledWaitMs, 0);
+  } finally {
+    deactivate();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("AskUserQuestion row and sessions.onDidChangeList needs_attention drop speed to 0 and surface ASK/INPUT", async () => {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "zcode-telemetry-ask-"));
+  const dbPath = createMinimalDb(dataDir);
+  const { mockCtx, slotUpdates, views, listeners } = createHarness(dbPath, { allowGrant: true });
+
+  try {
+    await activate(mockCtx, { sqliteOptions: { dbPath } });
+    await new Promise((r) => setTimeout(r, 80));
+
+    listeners.onConvChange({ sessionId: "sess_live", logEpoch: "e1", revision: 1, phase: "running" });
+    listeners.onDidGenerate({
+      sessionId: "sess_live",
+      requestId: "req_ask_1",
+      phase: "streaming",
+      model: { providerId: "z-ai", modelId: "glm-5.3-flash" },
+      outputTokensPerSecond: 215,
+    });
+    assert.ok(slotUpdates.at(-1).patch.text.includes("*"), "Expected live streaming pill before question");
+
+    listeners.onRowsChange({
+      kind: "rows",
+      logEpoch: "e1",
+      revision: 2,
+      upserted: [
+        { kind: "toolCall", rowId: 4, toolCallId: "tc_ask", toolName: "AskUserQuestion", status: "running", inputText: "{}" },
+      ],
+    });
+
+    const askPill = slotUpdates.at(-1).patch.text;
+    assert.ok(askPill.startsWith("ASK"), `Expected ASK pill when question tool runs, got "${askPill}"`);
+
+    const viewDef = views.get("dashboard");
+    const askSnap = await viewDef.tools.get_snapshot.run(
+      { sessionId: "sess_live", range: "session" },
+      { view: { id: "v_ask", sessionId: "sess_live" } },
+    );
+    assert.equal(askSnap.live.waitingForUser, true);
+    assert.equal(askSnap.live.activity.label, "ASK");
+    assert.equal(askSnap.throughput.phase, "idle");
+
+    listeners.onRowsChange({
+      kind: "rows",
+      logEpoch: "e1",
+      revision: 3,
+      upserted: [
+        { kind: "toolCall", rowId: 4, toolCallId: "tc_ask", toolName: "AskUserQuestion", status: "success", inputText: "{}" },
+      ],
+    });
+    listeners.onDidGenerate({
+      sessionId: "sess_live",
+      requestId: "req_ask_2",
+      phase: "streaming",
+      model: { providerId: "z-ai", modelId: "glm-5.3-flash" },
+      outputTokensPerSecond: 190,
+    });
+    assert.ok(slotUpdates.at(-1).patch.text.includes("*"), "Expected live streaming pill after question answered");
+
+    listeners.onListChange({
+      kind: "delta",
+      rev: 5,
+      upserted: [{ session: { sessionId: "sess_live" }, status: "needs_attention", title: "Main" }],
+      removed: [],
+    });
+
+    const inputPill = slotUpdates.at(-1).patch.text;
+    assert.ok(inputPill.startsWith("INPUT"), `Expected INPUT pill on needs_attention, got "${inputPill}"`);
+    const inputSnap = await viewDef.tools.get_snapshot.run(
+      { sessionId: "sess_live", range: "session" },
+      { view: { id: "v_ask", sessionId: "sess_live" } },
+    );
+    assert.equal(inputSnap.live.waitingForUser, true);
+    assert.equal(inputSnap.throughput.phase, "idle");
   } finally {
     deactivate();
     rmSync(dataDir, { recursive: true, force: true });

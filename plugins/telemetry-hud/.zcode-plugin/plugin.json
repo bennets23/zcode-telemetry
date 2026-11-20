@@ -1,6 +1,6 @@
 {
   "name": "telemetry-hud",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Live token throughput, calibrated context X-ray, prompt cache efficiency, subagent tracing, and tool/model latency telemetry for ZCode.",
   "author": {
     "name": "bennets23"

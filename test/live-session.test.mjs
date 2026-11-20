@@ -155,3 +155,74 @@ test("noteModelFinal clears active turn only when sessions.read conversationPhas
   assert.equal(finGranted.becameIdle, false);
   assert.equal(finGranted.state.isActiveTurn, true);
 });
+
+test("AskUserQuestion row sets question waitingForUser, tracks userWaitMs, and pauses stall detector", () => {
+  let clock = 1000;
+  const tracker = createLiveSessionTracker({ stallThresholdMs: 8000, now: () => clock });
+  tracker.onConversationChange({ sessionId: "sess_1", phase: "running" });
+
+  clock = 2000;
+  const askRes = tracker.onRowsChange("sess_1", {
+    kind: "rows",
+    logEpoch: "e1",
+    revision: 2,
+    upserted: [
+      { kind: "toolCall", rowId: 5, toolCallId: "tc_ask", toolName: "AskUserQuestion", status: "running", inputText: "{}" },
+    ],
+  });
+  assert.equal(askRes.waitingForUser, true);
+  assert.equal(askRes.state.activity.kind, "question");
+  assert.equal(askRes.state.activity.label, "ASK");
+  assert.equal(askRes.state.waitingForUser, true);
+
+  clock = 32000;
+  const waited = tracker.get("sess_1");
+  assert.equal(waited.userWaitMs, 30000);
+  assert.equal(waited.stalledWaitMs, 0);
+
+  const answered = tracker.onRowsChange("sess_1", {
+    kind: "rows",
+    logEpoch: "e1",
+    revision: 3,
+    upserted: [
+      { kind: "toolCall", rowId: 5, toolCallId: "tc_ask", toolName: "AskUserQuestion", status: "success", inputText: "{}" },
+    ],
+  });
+  assert.equal(answered.waitingForUser, false);
+  assert.equal(answered.state.activity.kind, "waiting");
+});
+
+test("onListChange tracks needs_attention as INPUT and clears cleanly back to running/idle", () => {
+  let clock = 5000;
+  const tracker = createLiveSessionTracker({ now: () => clock });
+  tracker.onConversationChange({ sessionId: "sess_q", phase: "running" });
+
+  clock = 6000;
+  const snapRes = tracker.onListChange({
+    kind: "snapshot",
+    rev: 1,
+    sessions: [
+      { session: { sessionId: "sess_q" }, status: "needs_attention", title: "Q" },
+      { session: { sessionId: "sess_other" }, status: "idle", title: "Other" },
+    ],
+  });
+  assert.deepEqual(snapRes.changedIds, ["sess_q"]);
+  assert.equal(tracker.get("sess_q").waitingForUser, true);
+  assert.equal(tracker.get("sess_q").needsAttention, true);
+  assert.equal(tracker.get("sess_q").activity.label, "INPUT");
+
+  clock = 18000;
+  assert.equal(tracker.get("sess_q").userWaitMs, 12000);
+  assert.equal(tracker.get("sess_q").stalledWaitMs, 0);
+
+  const deltaRes = tracker.onListChange({
+    kind: "delta",
+    rev: 2,
+    upserted: [{ session: { sessionId: "sess_q" }, status: "running", title: "Q" }],
+    removed: [],
+  });
+  assert.deepEqual(deltaRes.changedIds, ["sess_q"]);
+  assert.equal(tracker.get("sess_q").waitingForUser, false);
+  assert.equal(tracker.get("sess_q").needsAttention, false);
+  assert.equal(tracker.get("sess_q").activity.kind, "waiting");
+});
